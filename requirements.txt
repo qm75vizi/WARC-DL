@@ -6,4 +6,3 @@ imageio
 fastwarc
 resiliparse
 transformers
-urllib
