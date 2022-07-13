@@ -1,21 +1,20 @@
 import collections
 import re
-from urllib.parse import urlparse
-
 import resiliparse.parse.lang
 import tensorflow as tf
 from resiliparse.parse.encoding import detect_encoding, bytes_to_str
+from urllib.parse import urlparse
 
-from pipelines.text_pipeline import TextPipeline
+from pipelines.html_pipeline import HTMLPipeline
 
 
 def _strip_schema_org_annotation(html):
     return re.sub(r' itemscope itemtype="http:\/\/schema\.org+[^ \r\n>]*', '', html)
 
 
-class WebsiteClassifierPipeline(TextPipeline):
+class WebsiteClassifierPipeline(HTMLPipeline):
     """
-    This is an example text classification pipeline based on
+    This is an example html classification pipeline based on
     Here, we use this model to extract websites.
     """
 
