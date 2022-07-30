@@ -44,8 +44,12 @@ class HTMLPipeline(PassthroughModelPipeline):
 
         return distributed_filter
 
-    def strip_schema_org_annotation(self, html):
-        return re.sub(r' itemscope itemtype="http:\/\/schema\.org+[^ \r\n>]*', '', html)
+    def get_strip_schema_org_annotation(self):
+
+        def strip_schema_org_annotations(html):
+            return re.sub(r' itemscope itemtype="http:\/\/schema\.org+[^ \r\n>]*', '', html)
+
+        return strip_schema_org_annotations
 
     def get_annotation(self):
 
@@ -72,7 +76,7 @@ class HTMLPipeline(PassthroughModelPipeline):
         max_content_length = self.max_content_length
         distributed_filter = self.get_distributed_filter()
         annotator = self.get_annotation()
-        stripped_html = self.strip_schema_org_annotation()
+        stripped_html = self.get_strip_schema_org_annotation()
         AWS_ACCESS_KEY_ID = self.AWS_ACCESS_KEY_ID
         AWS_SECRET = self.AWS_SECRET
         ENDPOINT_URL = self.ENDPOINT_URL
