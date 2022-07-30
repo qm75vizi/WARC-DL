@@ -9,11 +9,10 @@ from resiliparse.parse.encoding import detect_encoding, bytes_to_str
 from urllib.parse import urlparse
 
 from helpers import create_s3_client, get_file_stream
-from pipelines.pipeline import Pipeline
 from pipelines.tools.passthrough_model import PassthroughModelPipeline
 
 
-class HTMLPipeline(Pipeline, abc.ABC, PassthroughModelPipeline):
+class HTMLPipeline(PassthroughModelPipeline):
 
     def __init__(self, out_dir, max_content_length):
         self.out_dir = out_dir
