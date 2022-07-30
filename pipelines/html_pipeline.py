@@ -1,27 +1,19 @@
 import abc
-import base64
+import json
 import os
-from collections import Counter
-
-import numpy as np
+import re
 import tensorflow as tf
+from collections import Counter
 from fastwarc.warc import ArchiveIterator
-from resiliparse.extract.html2text import extract_plain_text
-from resiliparse.parse import detect_encoding
-from resiliparse.parse.html import HTMLTree
+from resiliparse.parse.encoding import detect_encoding, bytes_to_str
+from urllib.parse import urlparse
 
 from helpers import create_s3_client, get_file_stream
 from pipelines.pipeline import Pipeline
+from pipelines.tools.passthrough_model import PassthroughModelPipeline
 
 
-class HTMLPipeline(Pipeline, abc.ABC):
-    """
-    This pipeline extracts texts from websites from the WARC files. It streams the following to the driver/GPU:
-    An (optionally tokenized) version of the website text, which should be as clean as possible (useful for neural
-    network input),
-    an original version of the text as a string,
-    the website url.
-    """
+class HTMLPipeline(Pipeline, abc.ABC, PassthroughModelPipeline):
 
     def __init__(self, out_dir, max_content_length):
         self.out_dir = out_dir
@@ -33,47 +25,55 @@ class HTMLPipeline(Pipeline, abc.ABC):
 
     def get_signature(self):
         return (
-            self.get_tokens_spec(),  # text for classification
-            tf.TensorSpec(shape=(), dtype=tf.string),  # text for export
+            tf.TensorSpec(shape=(), dtype=tf.string),  # plain html text
+            tf.TensorSpec(shape=(), dtype=tf.string),  # annotation
             tf.TensorSpec(shape=(), dtype=tf.string))  # url
 
     def get_distributed_filter(self):
-        """
-        Overridable method that provides a filter, which is executed on the pyspark cluster nodes.
-        The returned distributed_filter must not use self. Needed attributes of self should be extracted into variables
-        outside of the definition of distributed_filter, which may then use these variables.
-        """
+        acc_counter = self.acc_counter
 
-        def distributed_filter(text):
+        def distributed_filter(html, domain):
+            if resiliparse.parse.lang.detect_fast(html)[0] != "en":
+                return False
+            if "lang=\"en\"" not in html:
+                return False
+            if "http://schema.org" not in html:
+                return False
+            if acc_counter.get(f"n_domain_{domain}") >= 2000:
+                return False
             return True
 
         return distributed_filter
 
-    def get_tokens_spec(self):
-        """
-        Overridable method that returns a tf.TensorSpec which corresponds to the values returned by the tokenizer
-        defined in get_tokenizer().
-        """
+    def strip_schema_org_annotation(self, html):
+        return re.sub(r' itemscope itemtype="http:\/\/schema\.org+[^ \r\n>]*', '', html)
 
-        return tf.TensorSpec(shape=(), dtype=tf.string)
+    def get_annotation(self):
 
-    def get_tokenizer(self):
-        """
-        Overridable method that provides a tokenizer, which is executed on the pyspark cluster nodes.
-        The returned tokenizer must not use self. Needed attributes of self should be extracted into variables
-        outside of the definition of tokenizer, which may then use these variables.
-        """
+        def annotation(html):
+            schema_newsarticle_annotation = "http://schema.org/NewsArticle"
+            schema_blog_annotation = "http://schema.org/Blog"
+            schema_event_annotation = "http://schema.org/Event"
+            schema_product_annotation = "http://schema.org/Product"
 
-        def tokenizer(text):
-            return text
+            if schema_product_annotation in html:
+                annotation = "product"
+            if schema_newsarticle_annotation in html:
+                annotation = "news"
+            if schema_blog_annotation in html:
+                annotation = "blog"
+            if schema_event_annotation in html:
+                annotation = "event"
+            return annotation
 
-        return tokenizer
+        return annotation
 
     def get_generator_factory(self):
         acc_counter = self.acc_counter
         max_content_length = self.max_content_length
         distributed_filter = self.get_distributed_filter()
-        tokenizer = self.get_tokenizer()
+        annotator = self.get_annotation()
+        stripped_html = self.strip_schema_org_annotation()
         AWS_ACCESS_KEY_ID = self.AWS_ACCESS_KEY_ID
         AWS_SECRET = self.AWS_SECRET
         ENDPOINT_URL = self.ENDPOINT_URL
@@ -93,25 +93,16 @@ class HTMLPipeline(Pipeline, abc.ABC):
                         content_type = str(record.http_content_type).lower()
                         if content_type.startswith("text/html"):
                             url = str(record.headers['WARC-Target-URI'])
+                            domain = urlparse(url).netloc
+                            acc_counter.add(Counter({f"n_domain_{domain}": 1}))
                             html_bytes = record.reader.read()
-                            try:
-                                encoding = record.http_charset
-                                if encoding is None:
-                                    encoding = detect_encoding(html_bytes)
-                                tree = HTMLTree.parse_from_bytes(html_bytes, encoding)
-                            except:
-                                acc_counter.add(Counter({"n_parsing_exception": 1}))
-                                continue
+                            html = bytes_to_str(html_bytes, detect_encoding(html_bytes))
 
-                            export_text = extract_plain_text(tree, preserve_formatting=True, main_content=True,
-                                                             list_bullets=True, alt_texts=True, links=True,
-                                                             form_fields=True, noscript=True)
-
-                            if not distributed_filter(record):
+                            if not distributed_filter(html, domain):
                                 acc_counter.add(Counter({"n_distributed_filter_not_passed": 1}))
                                 continue
 
-                            yield tokenizer(html_bytes), export_text, url
+                            yield stripped_html(html), annotator(html), url
                             acc_counter.add(Counter({"n_node_results": 1}))
 
                         else:
@@ -125,9 +116,20 @@ class HTMLPipeline(Pipeline, abc.ABC):
 
         return generator_factory
 
-    def export(self, prediction, export_text, url):
-        prediction = np.reshape(prediction, ())
-        print(url.decode("utf-8"), prediction)
-        with open(f"{self.out_dir}/{base64.urlsafe_b64encode(url[:128]).decode('utf-8')}_{prediction:1.4f}.txt",
-                  "w") as f:
-            f.write(export_text.decode("utf-8"))
+    def export(self, html, annotation, url):
+        print(url, html, annotation)
+        with open(self.out_dir, "a") as f:
+            f.write(
+                json.dumps(
+                    {
+                        'url': url,
+                        'annotation': annotation,
+                        'html': html,
+                    },
+                    ensure_ascii=False) + '\n'
+            )
+
+
+if __name__ == "__main__":
+    p = HTMLPipeline(out_dir="data/website_classifier/out/", max_content_length=4000000)
+    p.run()
