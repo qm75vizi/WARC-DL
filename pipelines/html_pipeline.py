@@ -103,6 +103,7 @@ class HTMLPipeline(PassthroughModelPipeline):
 
                             yield stripped_html(html), annotator(html), url
                             acc_counter.add(Counter({"n_node_results": 1}))
+                            print("print acc in generator_factory", acc_counter)
 
                         else:
                             acc_counter.add(Counter({"n_wrong_content_type": 1}))
