@@ -2,18 +2,20 @@ import abc
 import json
 import os
 import re
-import tensorflow as tf
 from collections import Counter
-from fastwarc.warc import ArchiveIterator
-from resiliparse.parse.encoding import detect_encoding, bytes_to_str
 from urllib.parse import urlparse
 
+import pandas as pd
+import tensorflow as tf
+from fastwarc.warc import ArchiveIterator
 from helpers import create_s3_client, get_file_stream
+from resiliparse.parse.encoding import bytes_to_str, detect_encoding
+from resiliparse.parse.lang import detect_fast
+
 from pipelines.tools.passthrough_model import PassthroughModelPipeline
 
 
 class HTMLPipeline(PassthroughModelPipeline):
-
     def __init__(self, out_dir, max_content_length):
         self.out_dir = out_dir
         if self.out_dir is not None:
@@ -26,15 +28,16 @@ class HTMLPipeline(PassthroughModelPipeline):
         return (
             tf.TensorSpec(shape=(), dtype=tf.string),  # plain html text
             tf.TensorSpec(shape=(), dtype=tf.string),  # annotation
-            tf.TensorSpec(shape=(), dtype=tf.string))  # url
+            tf.TensorSpec(shape=(), dtype=tf.string),
+        )  # url
 
     def get_distributed_filter(self):
         acc_counter = self.acc_counter
 
         def distributed_filter(html, domain):
-            if resiliparse.parse.lang.detect_fast(html)[0] != "en":
+            if detect_fast(html)[0] != "en":
                 return False
-            if "lang=\"en\"" not in html:
+            if 'lang="en"' not in html:
                 return False
             if "http://schema.org" not in html:
                 return False
@@ -45,29 +48,24 @@ class HTMLPipeline(PassthroughModelPipeline):
         return distributed_filter
 
     def get_strip_schema_org_annotation(self):
-
         def strip_schema_org_annotations(html):
-            return re.sub(r' itemscope itemtype="http:\/\/schema\.org+[^ \r\n>]*', '', html)
+            return re.sub(r' itemscope itemtype="http:\/\/schema\.org+[^ \r\n>]*', "", html)
 
         return strip_schema_org_annotations
 
     def get_annotation(self):
-
         def annotation(html):
-            schema_newsarticle_annotation = "http://schema.org/NewsArticle"
-            schema_blog_annotation = "http://schema.org/Blog"
-            schema_event_annotation = "http://schema.org/Event"
-            schema_product_annotation = "http://schema.org/Product"
-
-            if schema_product_annotation in html:
-                annotation = "product"
-            if schema_newsarticle_annotation in html:
-                annotation = "news"
-            if schema_blog_annotation in html:
-                annotation = "blog"
-            if schema_event_annotation in html:
-                annotation = "event"
-            return annotation
+            # schema_map to df
+            schema_map_df = pd.read_csv("schema_map.csv")
+            # list of all existing schema_org annotations in html
+            existing_schemas = re.findall(r'http:\/\/schema\.org+[^ \r\n>"\']*', html)
+            # iterate through list of schemas to find label in data frame
+            for schema in existing_schemas:
+                annotation = schema_map_df[
+                    schema_map_df["schema"] == re.sub(r"http:\/\/schema\.org\/", "", schema)
+                ].label.values
+                if annotation.size > 0:
+                    return annotation[0]
 
         return annotation
 
@@ -92,10 +90,10 @@ class HTMLPipeline(PassthroughModelPipeline):
                     if record.http_headers is None:
                         acc_counter.add(Counter({"n_http_headers_none": 1}))
                         continue
-                    if record.headers['WARC-Type'] == 'response' and record.content_length >= 128:
+                    if record.headers["WARC-Type"] == "response" and record.content_length >= 128:
                         content_type = str(record.http_content_type).lower()
                         if content_type.startswith("text/html"):
-                            url = str(record.headers['WARC-Target-URI'])
+                            url = str(record.headers["WARC-Target-URI"])
                             domain = urlparse(url).netloc
                             acc_counter.add(Counter({f"n_domain_{domain}": 1}))
                             html_bytes = record.reader.read()
@@ -126,11 +124,13 @@ class HTMLPipeline(PassthroughModelPipeline):
             f.write(
                 json.dumps(
                     {
-                        'url': url,
-                        'annotation': annotation,
-                        'html': html,
+                        "url": url,
+                        "annotation": annotation,
+                        "html": html,
                     },
-                    ensure_ascii=False) + '\n'
+                    ensure_ascii=False,
+                )
+                + "\n"
             )
 
 
