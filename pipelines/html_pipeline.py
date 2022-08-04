@@ -49,14 +49,18 @@ class HTMLPipeline(PassthroughModelPipeline):
 
     def get_strip_schema_org_annotation(self):
         def strip_schema_org_annotations(html):
-            return re.sub(r' itemscope itemtype="http:\/\/schema\.org+[^ \r\n>]*', "", html)
+            # remove itemscope and itemtype
+            html = re.sub(r' itemscope itemtype="http:\/\/schema\.org+[^ \r\n>]*', "", html)
+            # remove itemprop
+            html = re.sub(r' itemprop=["\']\w*["\']', "", html)
+            return html
 
         return strip_schema_org_annotations
 
     def get_annotation(self):
         def annotation(html):
             # schema_map to df
-            schema_map_df = pd.read_csv("schema_map.csv")
+            schema_map_df = pd.read_csv("resources/schema_map.csv")
             # list of all existing schema_org annotations in html
             existing_schemas = re.findall(r'http:\/\/schema\.org+[^ \r\n>"\']*', html)
             # iterate through list of schemas to find label in data frame
