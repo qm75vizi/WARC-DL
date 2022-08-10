@@ -12,10 +12,10 @@ from helpers import create_s3_client, get_file_stream
 from resiliparse.parse.encoding import bytes_to_str, detect_encoding
 from resiliparse.parse.lang import detect_fast
 
-from pipelines.tools.passthrough_model import PassthroughModelPipeline
+from pipelines.tools.passthrough_model import ExportDatasetPipeline
 
 
-class HTMLPipeline(PassthroughModelPipeline):
+class HTMLPipeline(ExportDatasetPipeline):
     def __init__(self, out_dir, max_content_length):
         self.out_dir = out_dir
         if self.out_dir is not None:
@@ -123,7 +123,6 @@ class HTMLPipeline(PassthroughModelPipeline):
         return generator_factory
 
     def export(self, html, annotation, url):
-        print(url, html, annotation)
         with open(self.out_dir, "a") as f:
             f.write(
                 json.dumps(
