@@ -15,7 +15,7 @@ from resiliparse.parse.lang import detect_fast
 from pipelines.tools.passthrough_model import ExportDatasetPipeline
 
 
-class HTMLPipeline(ExportDatasetPipeline):
+class HTMLPipeline(Pipeline, abc.ABC):
     def __init__(self, out_dir, max_content_length):
         self.out_dir = out_dir
         if self.out_dir is not None:
@@ -28,8 +28,8 @@ class HTMLPipeline(ExportDatasetPipeline):
         return (
             tf.TensorSpec(shape=(), dtype=tf.string),  # plain html text
             tf.TensorSpec(shape=(), dtype=tf.string),  # annotation
-            tf.TensorSpec(shape=(), dtype=tf.string),
-        )  # url
+            tf.TensorSpec(shape=(), dtype=tf.string),  # domain
+        )  
 
     def get_distributed_filter(self):
         acc_counter = self.acc_counter
@@ -107,7 +107,7 @@ class HTMLPipeline(ExportDatasetPipeline):
                                 acc_counter.add(Counter({"n_distributed_filter_not_passed": 1}))
                                 continue
 
-                            yield stripped_html(html), annotator(html), url
+                            yield stripped_html(html), annotator(html), domain
                             acc_counter.add(Counter({"n_node_results": 1}))
                             print("print acc in generator_factory", acc_counter)
 
@@ -127,7 +127,7 @@ class HTMLPipeline(ExportDatasetPipeline):
             f.write(
                 json.dumps(
                     {
-                        "url": url,
+                        "domain": domain,
                         "annotation": annotation,
                         "html": html,
                     },
